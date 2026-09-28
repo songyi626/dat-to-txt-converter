@@ -21,7 +21,7 @@
     }
     .container {
       width: 100%;
-      max-width: 860px;
+      max-width: 820px;
       background: #ffffff;
       padding: 32px;
       border-radius: 12px;
@@ -139,7 +139,6 @@
     .file-details {
       font-size: 12px;
       color: #718096;
-      line-height: 1.5;
     }
     .file-preview {
       display: none;
@@ -163,11 +162,11 @@
 
 <div class="container">
   <h1>PicoHarp 300 (.phd) 轉純數據表格</h1>
-  <p class="subtitle">僅保留雙欄數值（Time[ns] 與 Counts），不含任何表頭文字</p>
+  <p class="subtitle">自動解析真實 Resolution 與通道計數，僅匯出 Time(ns) 與 Counts 雙欄數值</p>
 
   <div class="drop-zone" id="dropZone">
     <p>拖曳多個 <strong>.phd</strong> 檔案至此，或點擊選取檔案</p>
-    <span>瀏覽器本機端批次解析，直接輸出兩欄純數值格式</span>
+    <span>瀏覽器本機端批次轉換，可單檔下載或一鍵 ZIP 打包</span>
     <input type="file" id="fileInput" multiple accept=".phd, .PHD">
   </div>
 
@@ -210,88 +209,139 @@
     return str.trim();
   }
 
-  function parsePicoHarpFile(buffer) {
+  // 精準解析 PicoHarp 300 v2.0 二進位檔
+  function parsePicoHarpPhd(buffer) {
     const view = new DataView(buffer);
     let offset = 0;
 
     const ident = readAscii(view, offset, 16); offset += 16;
     if (!ident.includes('PicoHarp 300')) {
-      throw new Error(`非標準 PicoHarp 300 格式 (Ident: ${ident})`);
+      throw new Error(`非標準 PicoHarp 300 檔案格式 (${ident})`);
     }
 
-    const formatVersion = readAscii(view, offset, 6); offset += 6;
-    const creatorName = readAscii(view, offset, 18); offset += 18;
-    const creatorVersion = readAscii(view, offset, 12); offset += 12;
+    const version = readAscii(view, offset, 6); offset += 6;
+    offset += 18; // CreatorName
+    offset += 12; // CreatorVersion
     const fileTime = readAscii(view, offset, 18); offset += 18;
-    offset += 2;   // crlf
-    offset += 256; // comment
+    offset += 2;   // CRLF
+    offset += 256; // Comment
 
     const numberOfCurves = view.getInt32(offset, true); offset += 4;
     const bitsPerHistoBin = view.getInt32(offset, true); offset += 4;
     const routingChannels = view.getInt32(offset, true); offset += 4;
-    offset += (4 * 15); // other header settings
+    const numberOfBoards = view.getInt32(offset, true); offset += 4;
+    offset += 4; // activeCurve
+    offset += 4; // measurementMode
+    offset += 4; // subMode
+    offset += 4; // rangeNo
+    offset += 4; // offset
+    offset += 4; // acqTime
+    offset += 4; // stopAt
+    offset += 4; // stopOnOvfl
+    offset += 4; // restart
+    offset += 4; // dispLinLog
+    offset += 4; // dispTimeFrom
+    offset += 4; // dispTimeTo
+    offset += 4; // dispCountFrom
+    offset += 4; // dispCountTo
 
-    // Display Curves (8 * 4 * 3)
-    offset += (8 * 4 * 3);
+    // Display Curves (8 * 12 bytes = 96 bytes)
+    offset += (8 * 3 * 4);
 
-    // Cursors (3 * 4 * 3)
-    offset += (3 * 4 * 3);
+    // Cursors (3 * 12 bytes = 36 bytes)
+    offset += (3 * 3 * 4);
 
     // Board Specific Header
     offset += 10; // hwSerial
     offset += 8;  // hwPartNo
-    offset += (4 * 12); // board settings
+    offset += 4;  // hwVersion
+    offset += 4;  // hwIndex
+    offset += 4;  // numInputs
+    offset += 4;  // res (p300_resolution)
+    offset += 4;  // syncRate
+    offset += 4;  // cfdZeroCross0
+    offset += 4;  // cfdLevel0
+    offset += 4;  // cfdZeroCross1
+    offset += 4;  // cfdLevel1
+    offset += 4;  // countRate0
+    offset += 4;  // countRate1
+    offset += 4;  // syncDivider
 
-    // Router structure
+    // Routing Channels Header (if any)
     if (routingChannels > 1) {
       offset += (routingChannels * (4 + 4 + 4 + 4));
     }
 
     const curves = [];
+    const curveCount = Math.max(1, numberOfCurves);
 
-    for (let c = 0; c < Math.max(1, numberOfCurves); c++) {
+    for (let c = 0; c < curveCount; c++) {
       if (offset >= buffer.byteLength) break;
 
-      offset += 4; // curveIndex
-      offset += 4; // timeOfRec
+      // Curve SubHeader
+      const curveIndex = view.getInt32(offset, true); offset += 4;
+      offset += 4;  // timeOfRec
       offset += 10; // chHwSerial
       offset += 8;  // chHwPartNo
-      offset += (4 * 3); // chHwVersion, chHwIndex, chInput
+      offset += 4;  // chHwVersion
+      offset += 4;  // chHwIndex
+      offset += 4;  // chInput
       
+      // Resolution: PicoHarp 300 記錄的是 float (單位通常為 ns，例如 0.000256 ns 或是 ps 256.0)
       const chResolution = view.getFloat32(offset, true); offset += 4;
-      offset += (4 * 12); // rates, levels, sync settings, router
+      
+      offset += 4;  // chSyncRate
+      offset += 4;  // chCfdZero0
+      offset += 4;  // chCfdLev0
+      offset += 4;  // chCfdZero1
+      offset += 4;  // chCfdLev1
+      offset += 4;  // chCount0
+      offset += 4;  // chCount1
+      offset += 4;  // chSyncDiv
+      offset += 4;  // chRouterModel
+      offset += 4;  // chRouterChan
+      offset += 4;  // chOffset
+      offset += 4;  // chSyncOffset
 
+      // 通道數量
       const chChannels = view.getInt32(offset, true); offset += 4;
-      offset += 4; // chRangeNo
+      offset += 4;  // chRangeNo
 
-      let actualResPs = (chResolution > 0 && chResolution < 10000) ? chResolution : 4.0;
-      let actualChannels = (chChannels > 0 && chChannels <= 65536) ? chChannels : 65536;
+      // 判斷 Resolution 單位：如果 < 1，通常表示已經是 ns（如 0.000256）；若 >= 1，表示是 ps（如 256.0）
+      let stepNs = 0.2560; // 預設安全值
+      if (chResolution > 0) {
+        if (chResolution < 1.0) {
+          stepNs = chResolution; // 單位為 ns
+        } else {
+          stepNs = chResolution / 1000.0; // 單位為 ps，轉 ns
+        }
+      }
 
-      const resolutionNs = actualResPs / 1000.0;
-      let pureData = '';
+      let channels = (chChannels > 0 && chChannels <= 65536) ? chChannels : 65536;
 
-      for (let i = 0; i < actualChannels; i++) {
+      // 提取 Counts
+      let textData = '';
+      for (let i = 0; i < channels; i++) {
         if (offset + 4 <= buffer.byteLength) {
           const counts = view.getUint32(offset, true);
           offset += 4;
-          const t = (i * resolutionNs).toFixed(5);
-          pureData += `${t}\t${counts}\n`;
+          const t = (i * stepNs).toFixed(4);
+          textData += `${t}\t${counts}\n`;
         } else {
           break;
         }
       }
 
       curves.push({
-        curveIndex: c,
-        resolutionPs: actualResPs,
-        channels: actualChannels,
-        text: pureData
+        index: c,
+        channels: channels,
+        resolutionNs: stepNs,
+        text: textData
       });
     }
 
     return {
       fileTime,
-      numberOfCurves: Math.max(1, numberOfCurves),
       curves
     };
   }
@@ -317,7 +367,7 @@
 
       try {
         const buffer = await file.arrayBuffer();
-        const parsed = parsePicoHarpFile(buffer);
+        const parsed = parsePicoHarpPhd(buffer);
 
         parsed.curves.forEach((curve, idx) => {
           const exportName = parsed.curves.length > 1 
@@ -332,7 +382,7 @@
           renderFileItem(
             exportName,
             curve.text,
-            `解析度: ${curve.resolutionPs} ps | 資料點數: ${curve.channels}`,
+            `間隔: ${curve.resolutionNs.toFixed(4)} ns | 總點數: ${curve.channels}`,
             false
           );
         });
@@ -344,7 +394,7 @@
       statusText.textContent = `解析中... (${i + 1}/${validFiles.length})`;
     }
 
-    statusText.textContent = `完成！共轉換 ${outputArchives.length} 條純數據曲線。`;
+    statusText.textContent = `完成！成功處理 ${outputArchives.length} 條曲線。`;
     if (outputArchives.length > 0) {
       zipDownloadBtn.style.display = 'inline-block';
     }
@@ -387,10 +437,10 @@
       details.textContent = metaInfo;
       item.appendChild(details);
 
-      // 預覽前 15 行純數據
+      // 預覽前 20 行
       const preview = document.createElement('div');
       preview.className = 'file-preview';
-      preview.textContent = content.split('\n').slice(0, 16).join('\n') + '\n... (其餘數據省略)';
+      preview.textContent = content.split('\n').slice(0, 20).join('\n') + '\n...';
       item.appendChild(preview);
 
       toggleBtn.addEventListener('click', () => {
