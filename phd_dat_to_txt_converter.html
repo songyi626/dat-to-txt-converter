@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TRPL 光譜數據轉檔工具 (.phd / .dat 轉 .txt)</title>
+  <!-- JSZip for batch zip export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --accent: #38bdf8;
+      --accent-hover: #0ea5e9;
+      --success: #10b981;
+      --danger: #ef4444;
+      --text: #f1f5f9;
+      --text-dim: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 30px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 960px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    .header h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .header p {
+      font-size: 0.95rem;
+      color: var(--text-dim);
+      margin-top: 6px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.25);
+    }
+    /* Drag & Drop Area */
+    .dropzone {
+      border: 2px dashed #475569;
+      border-radius: 10px;
+      padding: 40px 20px;
+      text-align: center;
+      cursor: pointer;
+      background: #0f172a66;
+      transition: all 0.25s ease;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--accent);
+      background: #38bdf811;
+      transform: translateY(-1px);
+    }
+    .drop-icon {
+      width: 52px;
+      height: 52px;
+      color: var(--accent);
+    }
+    .drop-text {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .drop-sub {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+    }
+    .btn {
+      background: var(--card-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 18px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn-primary {
+      background: var(--accent);
+      color: #0f172a;
+      border: none;
+    }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-success {
+      background: var(--success);
+      color: #0f172a;
+      border: none;
+    }
+    .btn-success:hover { opacity: 0.9; }
+
+    /* Actions toolbar */
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .stats-badge {
+      font-size: 0.88rem;
+      color: var(--text-dim);
+    }
+    .stats-badge span {
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    /* File List Table */
+    .file-table-wrap {
+      margin-top: 15px;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #090d16;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    th, td {
+      padding: 10px 14px;
+      text-align: left;
+    }
+    th {
+      background: #1e293b;
+      color: var(--text-dim);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    tr:not(:last-child) td {
+      border-bottom: 1px solid #1e293b;
+    }
+    tr:hover td {
+      background: #1e293b55;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+    .badge-phd { background: #38bdf822; color: #38bdf8; border: 1px solid #38bdf855; }
+    .badge-dat { background: #f59e0b22; color: #f59e0b; border: 1px solid #f59e0b55; }
+    .badge-ready { background: #10b98122; color: #10b981; border: 1px solid #10b98155; }
+    .badge-err { background: #ef444422; color: #ef4444; border: 1px solid #ef444455; }
+
+    /* Preview Modal / Drawer */
+    .preview-box {
+      margin-top: 15px;
+      padding: 12px;
+      background: #000;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.8rem;
+      color: #a5f3fc;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre;
+    }
+
+    .footer {
+      text-align: center;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      margin-top: 20px;
+    }
+    .footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="m9 15 2 2 4-4"/></svg>
+        TRPL / 光譜數據轉檔工具 (.phd / .dat &rarr; .txt)
+      </h1>
+      <p>純前端瀏覽器本機解析，支援 PicoHarp 300 (.phd)、一般 .dat / 二進制光譜，直接輸出兩欄標準 (時間/能量 &rarr; 計數) 之 .txt</p>
+    </div>
+
+    <!-- Main Card -->
+    <div class="card">
+      <!-- Dropzone -->
+      <div id="dropzone" class="dropzone" onclick="document.getElementById('fileInput').click()">
+        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <div class="drop-text">點擊此處選擇檔案，或直接將 .phd / .dat / 資料夾拖曳至此</div>
+        <div class="drop-sub">支援單檔、多選或整個實驗資料夾批次轉檔（全在您的瀏覽器內完成，資料不外傳）</div>
+      </div>
+      <input type="file" id="fileInput" multiple accept=".phd,.dat,.txt" style="display: none;">
+
+      <!-- Toolbar -->
+      <div class="toolbar" id="toolbar" style="display: none;">
+        <div class="stats-badge">
+          已解析: <span id="fileCount">0</span> 個檔案，共 <span id="pointCount">0</span> 個數據點
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn" onclick="clearAll()">清空清單</button>
+          <button class="btn btn-success" id="btnDownloadAll" onclick="downloadAllZip()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            下載全部轉檔 (.zip)
+          </button>
+        </div>
+      </div>
+
+      <!-- File Table -->
+      <div class="file-table-wrap" id="tableWrap" style="display: none;">
+        <table>
+          <thead>
+            <tr>
+              <th>檔名</th>
+              <th>原始類型</th>
+              <th>解析規格 / 時間解析度</th>
+              <th>數據點數 (Points)</th>
+              <th>狀態</th>
+              <th style="text-align: right;">操作</th>
+            </tr>
+          </thead>
+          <tbody id="fileListBody"></tbody>
+        </table>
+      </div>
+
+      <!-- Preview Drawer -->
+      <div id="previewWrap" style="display: none; margin-top: 15px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 0.85rem; font-weight: 600; color: var(--accent);" id="previewTitle">數據內容預覽</span>
+          <button class="btn" style="padding: 3px 8px; font-size: 0.75rem;" onclick="closePreview()">關閉預覽</button>
+        </div>
+        <div class="preview-box" id="previewContent"></div>
+      </div>
+    </div>
+
+    <!-- Usage Guide -->
+    <div class="card" style="font-size: 0.88rem; color: var(--text-dim); line-height: 1.7;">
+      <h3 style="color: var(--text); font-size: 1rem; margin-bottom: 8px;">📘 部署至 GitHub Pages 教學：</h3>
+      <ol style="padding-left: 20px;">
+        <li>將此單一 HTML 檔案命名為 <code>index.html</code> 並建立一個 GitHub 倉庫（Repository）上傳。</li>
+        <li>在 GitHub 倉庫頁面進入 <b>Settings</b> &rarr; <b>Pages</b>。</li>
+        <li>在 <b>Branch</b> 選擇 <code>main</code>（或 <code>master</code>），資料夾保持 <code>/ (root)</code>，點擊 <b>Save</b>。</li>
+        <li>稍候 1~2 分鐘即可獲得專屬公開網址（例如：<code>https://your-username.github.io/repo-name/</code>），隨開即用！</li>
+      </ol>
+    </div>
+
+    <div class="footer">
+      支援 PicoQuant PicoHarp 300 (.phd) 二進制光譜 &amp; 各式 ASCII/二進制 (.dat) 檔案轉換 • 純客戶端安全無雲端洩漏
+    </div>
+  </div>
+
+  <script>
+    const convertedFiles = [];
+
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const toolbar = document.getElementById('toolbar');
+    const tableWrap = document.getElementById('tableWrap');
+    const fileListBody = document.getElementById('fileListBody');
+    const fileCountSpan = document.getElementById('fileCount');
+    const pointCountSpan = document.getElementById('pointCount');
+    const previewWrap = document.getElementById('previewWrap');
+    const previewTitle = document.getElementById('previewTitle');
+    const previewContent = document.getElementById('previewContent');
+
+    // Drag and drop event listeners
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.add('dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropzone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropzone.classList.remove('dragover');
+      });
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropzone.classList.remove('dragover');
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) processFiles(files);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length > 0) processFiles(files);
+      fileInput.value = '';
+    });
+
+    async function processFiles(files) {
+      for (const file of files) {
+        try {
+          const result = await parseFile(file);
+          convertedFiles.push(result);
+        } catch (err) {
+          console.error(err);
+          convertedFiles.push({
+            name: file.name,
+            outName: file.name.replace(/\.[^/.]+$/, "") + ".txt",
+            type: file.name.split('.').pop().toLowerCase(),
+            spec: "解析失敗: " + err.message,
+            points: 0,
+            status: "error",
+            text: ""
+          });
+        }
+      }
+      renderTable();
+    }
+
+    // Binary Parser for PicoHarp 300 .phd / .dat
+    async function parseFile(file) {
+      const buf = await file.arrayBuffer();
+      const ext = file.name.split('.').pop().toLowerCase();
+      const outName = file.name.replace(/\.[^/.]+$/, "") + ".txt";
+
+      // 1. Check if PicoHarp 300 binary header format
+      if (buf.byteLength >= 864) {
+        const view = new DataView(buf);
+        // Check Ident string "PicoHarp 300"
+        let ident = "";
+        for (let i = 0; i < 16; i++) {
+          const code = view.getUint8(i);
+          if (code === 0) break;
+          ident += String.fromCharCode(code);
+        }
+
+        if (ident.startsWith("PicoHarp") || ext === "phd") {
+          // PicoHarp 300 format:
+          // 0x310 (784): Resolution (float32 little-endian in ns)
+          // 0x314 (788): Number of channels (uint32 little-endian, e.g. 65536)
+          // 0x318 (792): Tacq (uint32 ms)
+          // 0x33c (828): Data offset (uint32, typically 864)
+          const res = view.getFloat32(0x310, true);
+          let nch = view.getUint32(0x314, true);
+          let off = view.getUint32(0x33c, true);
+
+          if (off <= 0 || off >= buf.byteLength) off = 864;
+          if (nch <= 0 || (off + nch * 4) > buf.byteLength) {
+            nch = Math.floor((buf.byteLength - off) / 4);
+          }
+
+          if (res > 0 && nch > 0) {
+            const lines = [];
+            for (let i = 0; i < nch; i++) {
+              const time_ns = (i * res).toFixed(4);
+              const count = view.getUint32(off + i * 4, true);
+              lines.push(`${time_ns}\t${count}`);
+            }
+            const txt = lines.join('\n') + '\n';
+            return {
+              name: file.name,
+              outName: outName,
+              type: "PicoHarp 300 (.phd)",
+              spec: `Res = ${(res * 1000).toFixed(0)} ps (${res.toFixed(4)} ns)`,
+              points: nch,
+              status: "ready",
+              text: txt
+            };
+          }
+        }
+      }
+
+      // 2. Check if text-based file (.dat or .txt)
+      try {
+        const decoder = new TextDecoder('utf-8');
+        const str = decoder.decode(buf);
+        const rawLines = str.split(/\r?\n/).filter(l => l.trim().length > 0 && !l.trim().startsWith('#'));
+        
+        if (rawLines.length > 0) {
+          const firstTokens = rawLines[0].trim().split(/[\s,;\t]+/);
+          if (firstTokens.length >= 2 && !isNaN(Number(firstTokens[0])) && !isNaN(Number(firstTokens[1]))) {
+            // Re-format into standard tab-delimited 2 columns
+            const outLines = [];
+            for (let i = 0; i < rawLines.length; i++) {
+              const tok = rawLines[i].trim().split(/[\s,;\t]+/);
+              if (tok.length >= 2 && !isNaN(Number(tok[0])) && !isNaN(Number(tok[1]))) {
+                outLines.push(`${tok[0]}\t${tok[1]}`);
+              }
+            }
+            if (outLines.length > 0) {
+              return {
+                name: file.name,
+                outName: outName,
+                type: "ASCII 矩陣/光譜 (.dat)",
+                spec: `2-Column (Tab/Space 分隔)`,
+                points: outLines.length,
+                status: "ready",
+                text: outLines.join('\n') + '\n'
+              };
+            }
+          }
+        }
+      } catch (e) {
+        // Not text
+      }
+
+      // 3. Fallback: Generic uint32/uint16 raw stream
+      const view = new DataView(buf);
+      const n = Math.floor(buf.byteLength / 4);
+      const lines = [];
+      for (let i = 0; i < n; i++) {
+        lines.push(`${i}\t${view.getUint32(i * 4, true)}`);
+      }
+      return {
+        name: file.name,
+        outName: outName,
+        type: "二進制資料串 (.dat)",
+        spec: `Raw 32-bit Stream (Offset 0)`,
+        points: n,
+        status: "ready",
+        text: lines.join('\n') + '\n'
+      };
+    }
+
+    function renderTable() {
+      if (convertedFiles.length === 0) {
+        toolbar.style.display = 'none';
+        tableWrap.style.display = 'none';
+        return;
+      }
+      toolbar.style.display = 'flex';
+      tableWrap.style.display = 'block';
+
+      fileCountSpan.textContent = convertedFiles.length;
+      let totalPts = 0;
+      fileListBody.innerHTML = '';
+
+      convertedFiles.forEach((item, idx) => {
+        totalPts += item.points;
+        const tr = document.createElement('tr');
+        
+        const typeBadge = item.type.includes('PicoHarp') 
+          ? `<span class="badge badge-phd">${item.type}</span>`
+          : `<span class="badge badge-dat">${item.type}</span>`;
+
+        const statusBadge = item.status === 'ready'
+          ? `<span class="badge badge-ready">✓ 轉換完成</span>`
+          : `<span class="badge badge-err">✕ 失敗</span>`;
+
+        tr.innerHTML = `
+          <td style="font-weight: 600; color: #f8fafc;">${item.name}</td>
+          <td>${typeBadge}</td>
+          <td style="color: var(--text-dim);">${item.spec}</td>
+          <td style="font-family: monospace;">${item.points.toLocaleString()}</td>
+          <td>${statusBadge}</td>
+          <td style="text-align: right;">
+            ${item.status === 'ready' ? `
+              <button class="btn" style="padding: 4px 10px; font-size: 0.78rem;" onclick="previewFile(${idx})">預覽</button>
+              <button class="btn btn-primary" style="padding: 4px 10px; font-size: 0.78rem;" onclick="downloadSingle(${idx})">下載 .txt</button>
+            ` : ''}
+          </td>
+        `;
+        fileListBody.appendChild(tr);
+      });
+
+      pointCountSpan.textContent = totalPts.toLocaleString();
+    }
+
+    function previewFile(idx) {
+      const item = convertedFiles[idx];
+      previewTitle.textContent = `數據內容預覽：${item.outName} (前 50 行)`;
+      const sampleLines = item.text.split('\n').slice(0, 50).join('\n');
+      previewContent.textContent = sampleLines;
+      previewWrap.style.display = 'block';
+      previewWrap.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function closePreview() {
+      previewWrap.style.display = 'none';
+    }
+
+    function downloadSingle(idx) {
+      const item = convertedFiles[idx];
+      const blob = new Blob([item.text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = item.outName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function downloadAllZip() {
+      if (convertedFiles.length === 0) return;
+      const zip = new JSZip();
+      for (const item of convertedFiles) {
+        if (item.status === 'ready') {
+          zip.file(item.outName, item.text);
+        }
+      }
+      const btn = document.getElementById('btnDownloadAll');
+      const originalText = btn.innerHTML;
+      btn.innerHTML = "打包壓縮中...";
+      btn.disabled = true;
+
+      try {
+        const content = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = "converted_txt_data.zip";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        alert("打包失敗: " + err.message);
+      } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+      }
+    }
+
+    function clearAll() {
+      convertedFiles.length = 0;
+      closePreview();
+      renderTable();
+    }
+  </script>
+
+</body>
+</html>
