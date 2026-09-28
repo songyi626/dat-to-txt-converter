@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PHD 轉 TXT 批次轉換工具</title>
+  <title>PicoHarp 300 PHD 轉 ASCII 表格工具</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * {
@@ -21,7 +21,7 @@
     }
     .container {
       width: 100%;
-      max-width: 780px;
+      max-width: 820px;
       background: #ffffff;
       padding: 32px;
       border-radius: 12px;
@@ -31,7 +31,7 @@
       font-size: 22px;
       font-weight: 700;
       color: #1a202c;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     p.subtitle {
       font-size: 13px;
@@ -139,13 +139,13 @@
 <body>
 
 <div class="container">
-  <h1>.PHD 轉 .TXT 批次轉換工具</h1>
-  <p class="subtitle">支援多檔批次轉換、多編碼自動容錯及打包下載</p>
+  <h1>PicoHarp 300 (.phd) 轉 ASCII 數據表格</h1>
+  <p class="subtitle">專門解析 PicoHarp 二進位檔案，自動生成 Time (ns) 與 Counts 數據表</p>
 
   <div class="drop-zone" id="dropZone">
     <p>拖曳多個 <strong>.phd</strong> 檔案至此，或點擊選取檔案</p>
-    <span>支援多選、大小寫 .phd / .PHD 格式相容</span>
-    <input type="file" id="fileInput" multiple accept=".phd, .PHD, *">
+    <span>支援批次轉檔，解析後可直接匯入 Origin 進行擬合</span>
+    <input type="file" id="fileInput" multiple accept=".phd, .PHD">
   </div>
 
   <div class="actions">
@@ -190,88 +190,102 @@
     }
   });
 
-  // 判斷位元組陣列是否大量包含非純文字不可見字元（Null byte 或控制字元）
-  function isBinaryData(uint8Array) {
-    let nullCount = 0;
-    const sampleSize = Math.min(uint8Array.length, 1000);
-    for (let i = 0; i < sampleSize; i++) {
-      if (uint8Array[i] === 0) nullCount++;
+  function readFixedString(view, offset, length) {
+    let str = '';
+    for (let i = 0; i < length; i++) {
+      const b = view.getUint8(offset + i);
+      if (b === 0) break;
+      str += String.fromCharCode(b);
     }
-    return (nullCount / sampleSize) > 0.05;
+    return str.trim();
   }
 
-  // 從混合二進位檔案中提取可見字元與數值資料行
-  function extractPrintableText(uint8Array) {
-    let result = '';
-    let currentLine = '';
-    for (let i = 0; i < uint8Array.length; i++) {
-      const b = uint8Array[i];
-      if (b === 10 || b === 13) { // 換行
-        if (currentLine.trim().length > 0) {
-          result += currentLine.trim() + '\n';
-          currentLine = '';
-        }
-      } else if (b >= 32 && b <= 126) { // 可見 ASCII 字元
-        currentLine += String.fromCharCode(b);
-      } else if (b === 9) { // Tab 分隔符
-        currentLine += '\t';
-      }
-    }
-    if (currentLine.trim().length > 0) {
-      result += currentLine.trim() + '\n';
-    }
-    return result;
-  }
+  // 解析 PicoHarp 300 專用二進位結構 (v2.0)
+  function parsePicoHarpPHD(buffer) {
+    const view = new DataView(buffer);
+    const magic = readFixedString(view, 0, 16);
 
-  // 解碼邏輯：嘗試 UTF-8 ➔ Big5 ➔ ANSI，若判定為二進位則啟動文字提取器
-  async function parsePhdFile(file) {
-    const buffer = await file.arrayBuffer();
-    const uint8 = new Uint8Array(buffer);
-
-    if (isBinaryData(uint8)) {
-      const extracted = extractPrintableText(uint8);
-      return {
-        text: extracted,
-        type: '已自動提取可讀文字/數值資料（二進位結構）'
-      };
+    if (!magic.includes('PicoHarp 300')) {
+      throw new Error(`非標準 PicoHarp 300 檔案格式 (Magic: ${magic})`);
     }
 
-    // 嘗試一般文字解碼
-    const encodings = ['utf-8', 'big5', 'windows-1252'];
-    for (const enc of encodings) {
+    const version = readFixedString(view, 16, 6);
+    let channels = 65536;
+    let resolutionPs = 4;
+    let dataOffset = -1;
+
+    // v2.0 標準二進位標頭結構偏移
+    if (version.startsWith('2.')) {
       try {
-        const decoder = new TextDecoder(enc, { fatal: false });
-        const decoded = decoder.decode(buffer);
-        if (decoded && !decoded.includes('\uFFFD')) {
-          return { text: decoded, type: `編碼: ${enc.toUpperCase()}` };
+        // PicoHarp 2.0 結構通常通道數與 Resolution 位於 Curve Header
+        // 搜尋合適的直方圖資料起點 (一般在 2000~4000 bytes 之後)
+        // 取得 Curve 解析度與 Channels
+        // 標準 PicoHarp 2.0: Header 長度固定，曲線資料在最後 (Channels * 4 bytes)
+        const fileBytes = buffer.byteLength;
+        
+        // 常見 Channels: 65536, 32768, 16384, 8192, 4096
+        const testChannels = [65536, 32768, 16384, 8192, 4096, 2048, 1024];
+        for (const ch of testChannels) {
+          const expectedDataLen = ch * 4;
+          const candidateOffset = fileBytes - expectedDataLen;
+          if (candidateOffset > 500 && candidateOffset < 6000) {
+            channels = ch;
+            dataOffset = candidateOffset;
+            break;
+          }
         }
-      } catch (err) {
-        continue;
+
+        // 嘗試讀取 Resolution (float/ps)
+        // 典型 offset 在 curve header 內 (例如 dataOffset - 20 附近或固定偏移處)
+        for (let offset = 800; offset < Math.min(dataOffset, 2500); offset += 4) {
+          const val = view.getFloat32(offset, true);
+          if (val >= 0.001 && val <= 1000.0 && [1, 2, 4, 8, 16, 32, 64, 128, 256, 512].some(step => Math.abs(val - step) < 0.01)) {
+            resolutionPs = val;
+            break;
+          }
+        }
+      } catch (e) {
+        // 回退預設
       }
     }
 
-    // 若都帶有未知字元，以寬鬆 UTF-8 輸出
-    const fallbackDecoder = new TextDecoder('utf-8', { fatal: false });
+    if (dataOffset === -1) {
+      // 容錯備案：預設倒推 65536 通道
+      channels = Math.floor((buffer.byteLength - 2048) / 4);
+      dataOffset = buffer.byteLength - (channels * 4);
+    }
+
+    const resolutionNs = resolutionPs / 1000.0;
+    let output = `# PicoHarp 300 ASCII Export\n`;
+    output += `# Resolution: ${resolutionPs} ps (${resolutionNs} ns)\n`;
+    output += `# Channels: ${channels}\n`;
+    output += `Time(ns)\tCounts\n`;
+
+    for (let ch = 0; ch < channels; ch++) {
+      const counts = view.getUint32(dataOffset + (ch * 4), true);
+      const timeNs = (ch * resolutionNs).toFixed(5);
+      output += `${timeNs}\t${counts}\n`;
+    }
+
     return {
-      text: fallbackDecoder.decode(buffer),
-      type: '編碼: UTF-8 (寬鬆模式)'
+      text: output,
+      info: `解析度: ${resolutionPs} ps, 點數: ${channels}`
     };
   }
 
   async function processFiles(files) {
     convertedFiles = [];
     fileList.innerHTML = '';
-    
-    // 過濾副檔名，大小寫皆可
+
     const phdFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.phd'));
 
     if (phdFiles.length === 0) {
-      statusText.textContent = '未檢測到 .phd 檔案，請確認選取的檔案副檔名。';
+      statusText.textContent = '未選取 .phd 檔案。';
       zipDownloadBtn.style.display = 'none';
       return;
     }
 
-    statusText.textContent = `處理中... (0/${phdFiles.length})`;
+    statusText.textContent = `解析中... (0/${phdFiles.length})`;
     zipDownloadBtn.style.display = 'none';
 
     for (let i = 0; i < phdFiles.length; i++) {
@@ -279,22 +293,23 @@
       const newFileName = file.name.replace(/\.[^/.]+$/, "") + ".txt";
 
       try {
-        const { text, type } = await parsePhdFile(file);
-        
+        const buffer = await file.arrayBuffer();
+        const result = parsePicoHarpPHD(buffer);
+
         convertedFiles.push({
           name: newFileName,
-          content: text
+          content: result.text
         });
 
-        renderFileItem(newFileName, text, type, false);
+        renderFileItem(newFileName, result.text, result.info, false);
       } catch (err) {
         renderFileItem(newFileName, '', `解析失敗: ${err.message}`, true);
       }
 
-      statusText.textContent = `處理中... (${i + 1}/${phdFiles.length})`;
+      statusText.textContent = `解析中... (${i + 1}/${phdFiles.length})`;
     }
 
-    statusText.textContent = `處理完成！共解析 ${convertedFiles.length} 個檔案。`;
+    statusText.textContent = `完成！共轉換 ${convertedFiles.length} 個檔案。`;
     if (convertedFiles.length > 0) {
       zipDownloadBtn.style.display = 'inline-block';
     }
@@ -348,13 +363,13 @@
       const downloadUrl = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      a.download = `phd_converted_${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = `PicoHarp_ASCII_${new Date().toISOString().slice(0, 10)}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(downloadUrl);
     } catch (e) {
-      alert('打包 ZIP 失敗：' + e.message);
+      alert('打包失敗：' + e.message);
     } finally {
       zipDownloadBtn.disabled = false;
       zipDownloadBtn.textContent = '打包下載全部 (.zip)';
