@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PicoHarp 300 PHD 轉 ASCII 表格工具</title>
+  <title>PicoHarp 300 (.phd) 轉 ASCII 數據表格</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * {
@@ -13,19 +13,19 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }
     body {
-      background-color: #f4f6f9;
-      color: #333;
-      padding: 40px 20px;
+      background-color: #f0f2f5;
+      color: #2d3748;
+      padding: 30px 16px;
       display: flex;
       justify-content: center;
     }
     .container {
       width: 100%;
-      max-width: 820px;
+      max-width: 860px;
       background: #ffffff;
       padding: 32px;
       border-radius: 12px;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.08);
     }
     h1 {
       font-size: 22px;
@@ -43,9 +43,9 @@
       border-radius: 8px;
       padding: 36px 20px;
       text-align: center;
-      background: #f7fafc;
+      background: #f8fafc;
       cursor: pointer;
-      transition: border-color 0.2s, background-color 0.2s;
+      transition: all 0.2s ease;
     }
     .drop-zone:hover, .drop-zone.dragover {
       border-color: #3182ce;
@@ -53,6 +53,7 @@
     }
     .drop-zone p {
       font-size: 15px;
+      font-weight: 600;
       color: #4a5568;
     }
     .drop-zone span {
@@ -69,7 +70,7 @@
       justify-content: space-between;
       align-items: center;
       margin-top: 20px;
-      min-height: 40px;
+      min-height: 42px;
     }
     .status-text {
       font-size: 14px;
@@ -80,7 +81,7 @@
       background-color: #3182ce;
       color: #fff;
       border: none;
-      padding: 9px 16px;
+      padding: 10px 18px;
       border-radius: 6px;
       font-size: 14px;
       font-weight: 600;
@@ -92,59 +93,81 @@
       background-color: #2b6cb0;
     }
     .file-list {
-      margin-top: 16px;
-      max-height: 380px;
+      margin-top: 18px;
+      max-height: 480px;
       overflow-y: auto;
       border-top: 1px solid #e2e8f0;
     }
     .file-item {
+      padding: 14px 10px;
+      border-bottom: 1px solid #edf2f7;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .file-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 8px;
-      border-bottom: 1px solid #edf2f7;
-      font-size: 13px;
-    }
-    .file-meta {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      max-width: 75%;
     }
     .file-name {
       font-weight: 600;
-      color: #2d3748;
+      color: #1a202c;
       word-break: break-all;
     }
-    .file-info {
+    .file-actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .preview-toggle {
+      color: #4a5568;
+      font-size: 12px;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .download-link {
+      color: #3182ce;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .download-link:hover {
+      text-decoration: underline;
+    }
+    .file-details {
       font-size: 12px;
       color: #718096;
+      line-height: 1.5;
+    }
+    .file-preview {
+      display: none;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-family: monospace;
+      font-size: 11px;
+      padding: 10px;
+      border-radius: 6px;
+      max-height: 140px;
+      overflow-y: auto;
+      white-space: pre;
     }
     .badge-error {
       color: #e53e3e;
       font-weight: 600;
-    }
-    .download-single {
-      color: #3182ce;
-      text-decoration: none;
-      font-weight: 600;
-      cursor: pointer;
-      white-space: nowrap;
-    }
-    .download-single:hover {
-      text-decoration: underline;
     }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h1>PicoHarp 300 (.phd) 轉 ASCII 數據表格</h1>
-  <p class="subtitle">專門解析 PicoHarp 二進位檔案，自動生成 Time (ns) 與 Counts 數據表</p>
+  <h1>PicoHarp 300 (.phd) 轉 ASCII 工具</h1>
+  <p class="subtitle">解析 PicoHarp 300 2.0 / 2.3 二進位結構，產出 Origin 專用 Time(ns) 與 Counts 表格</p>
 
   <div class="drop-zone" id="dropZone">
     <p>拖曳多個 <strong>.phd</strong> 檔案至此，或點擊選取檔案</p>
-    <span>支援批次轉檔，解析後可直接匯入 Origin 進行擬合</span>
+    <span>完全於瀏覽器本機解析二進位檔頭與直方圖陣列，支援批次多檔轉換</span>
     <input type="file" id="fileInput" multiple accept=".phd, .PHD">
   </div>
 
@@ -163,34 +186,21 @@
   const zipDownloadBtn = document.getElementById('zipDownloadBtn');
   const fileList = document.getElementById('fileList');
 
-  let convertedFiles = [];
+  let outputArchives = [];
 
   dropZone.addEventListener('click', () => fileInput.click());
-
-  dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('dragover');
-  });
-
-  dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('dragover');
-  });
-
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('dragover'); });
   dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
-    if (e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
+    if (e.dataTransfer.files.length > 0) processFiles(e.dataTransfer.files);
   });
-
   fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-      processFiles(e.target.files);
-    }
+    if (e.target.files.length > 0) processFiles(e.target.files);
   });
 
-  function readFixedString(view, offset, length) {
+  function readAscii(view, offset, length) {
     let str = '';
     for (let i = 0; i < length; i++) {
       const b = view.getUint8(offset + i);
@@ -200,163 +210,275 @@
     return str.trim();
   }
 
-  // 解析 PicoHarp 300 專用二進位結構 (v2.0)
-  function parsePicoHarpPHD(buffer) {
+  // 核心：依據 PicoHarp 2.0 二進位結構循序解碼
+  function parsePicoHarpFile(buffer) {
     const view = new DataView(buffer);
-    const magic = readFixedString(view, 0, 16);
+    let offset = 0;
 
-    if (!magic.includes('PicoHarp 300')) {
-      throw new Error(`非標準 PicoHarp 300 檔案格式 (Magic: ${magic})`);
+    // 1. Main Header
+    const ident = readAscii(view, offset, 16); offset += 16;
+    if (!ident.includes('PicoHarp 300')) {
+      throw new Error(`非標準 PicoHarp 300 格式 (Ident: ${ident})`);
     }
 
-    const version = readFixedString(view, 16, 6);
-    let channels = 65536;
-    let resolutionPs = 4;
-    let dataOffset = -1;
+    const formatVersion = readAscii(view, offset, 6); offset += 6;
+    const creatorName = readAscii(view, offset, 18); offset += 18;
+    const creatorVersion = readAscii(view, offset, 12); offset += 12;
+    const fileTime = readAscii(view, offset, 18); offset += 18;
+    const crlf = readAscii(view, offset, 2); offset += 2;
+    const comment = readAscii(view, offset, 256); offset += 256;
 
-    // v2.0 標準二進位標頭結構偏移
-    if (version.startsWith('2.')) {
-      try {
-        // PicoHarp 2.0 結構通常通道數與 Resolution 位於 Curve Header
-        // 搜尋合適的直方圖資料起點 (一般在 2000~4000 bytes 之後)
-        // 取得 Curve 解析度與 Channels
-        // 標準 PicoHarp 2.0: Header 長度固定，曲線資料在最後 (Channels * 4 bytes)
-        const fileBytes = buffer.byteLength;
-        
-        // 常見 Channels: 65536, 32768, 16384, 8192, 4096
-        const testChannels = [65536, 32768, 16384, 8192, 4096, 2048, 1024];
-        for (const ch of testChannels) {
-          const expectedDataLen = ch * 4;
-          const candidateOffset = fileBytes - expectedDataLen;
-          if (candidateOffset > 500 && candidateOffset < 6000) {
-            channels = ch;
-            dataOffset = candidateOffset;
-            break;
-          }
-        }
+    const numberOfCurves = view.getInt32(offset, true); offset += 4;
+    const bitsPerHistoBin = view.getInt32(offset, true); offset += 4;
+    const routingChannels = view.getInt32(offset, true); offset += 4;
+    const numberOfBoards = view.getInt32(offset, true); offset += 4;
+    const activeCurve = view.getInt32(offset, true); offset += 4;
+    const measurementMode = view.getInt32(offset, true); offset += 4;
+    const subMode = view.getInt32(offset, true); offset += 4;
+    const rangeNo = view.getInt32(offset, true); offset += 4;
+    const offsetVal = view.getInt32(offset, true); offset += 4;
+    const acqTime = view.getInt32(offset, true); offset += 4; // ms
+    const stopAt = view.getInt32(offset, true); offset += 4;
+    const stopOnOvfl = view.getInt32(offset, true); offset += 4;
+    const restart = view.getInt32(offset, true); offset += 4;
+    const dispLinLog = view.getInt32(offset, true); offset += 4;
+    const dispTimeFrom = view.getInt32(offset, true); offset += 4;
+    const dispTimeTo = view.getInt32(offset, true); offset += 4;
+    const dispCountFrom = view.getInt32(offset, true); offset += 4;
+    const dispCountTo = view.getInt32(offset, true); offset += 4;
 
-        // 嘗試讀取 Resolution (float/ps)
-        // 典型 offset 在 curve header 內 (例如 dataOffset - 20 附近或固定偏移處)
-        for (let offset = 800; offset < Math.min(dataOffset, 2500); offset += 4) {
-          const val = view.getFloat32(offset, true);
-          if (val >= 0.001 && val <= 1000.0 && [1, 2, 4, 8, 16, 32, 64, 128, 256, 512].some(step => Math.abs(val - step) < 0.01)) {
-            resolutionPs = val;
-            break;
-          }
+    // 8 個 Display Curves
+    offset += (8 * 4 * 3); // DispCurveMap to DispCurveDispBottom
+
+    // 3 個光標 Cursor
+    offset += (3 * 4 * 3);
+
+    // Board Specific Header (PicoHarp 300 單板結構)
+    const hwSerial = readAscii(view, offset, 10); offset += 10;
+    const hwPartNo = readAscii(view, offset, 8); offset += 8;
+    const hwVersion = view.getInt32(offset, true); offset += 4;
+    const hwIndex = view.getInt32(offset, true); offset += 4;
+    const numInputs = view.getInt32(offset, true); offset += 4;
+    const p300_resolution = view.getInt32(offset, true); offset += 4;
+    const syncRate = view.getInt32(offset, true); offset += 4;
+    const cfdZeroCross0 = view.getInt32(offset, true); offset += 4;
+    const cfdLevel0 = view.getInt32(offset, true); offset += 4;
+    const cfdZeroCross1 = view.getInt32(offset, true); offset += 4;
+    const cfdLevel1 = view.getInt32(offset, true); offset += 4;
+    const countRate0 = view.getInt32(offset, true); offset += 4;
+    const countRate1 = view.getInt32(offset, true); offset += 4;
+    const syncDivider = view.getInt32(offset, true); offset += 4;
+
+    // Router 擴充結構 (若有配備路由通道)
+    if (routingChannels > 1) {
+      offset += (routingChannels * (4 + 4 + 4 + 4)); // Router 通道屬性
+    }
+
+    const curves = [];
+
+    // 2. 依序讀取 Curve SubHeader 與 Histogram Counts
+    for (let c = 0; c < Math.max(1, numberOfCurves); c++) {
+      if (offset >= buffer.byteLength) break;
+
+      const curveIndex = view.getInt32(offset, true); offset += 4;
+      const timeOfRec = view.getUint32(offset, true); offset += 4;
+      const chHwSerial = readAscii(view, offset, 10); offset += 10;
+      const chHwPartNo = readAscii(view, offset, 8); offset += 8;
+      const chHwVersion = view.getInt32(offset, true); offset += 4;
+      const chHwIndex = view.getInt32(offset, true); offset += 4;
+      const chInput = view.getInt32(offset, true); offset += 4;
+      const chResolution = view.getFloat32(offset, true); offset += 4; // 重要：以 ps 為單位的 float
+      const chSyncRate = view.getInt32(offset, true); offset += 4;
+      const chCfdZero0 = view.getInt32(offset, true); offset += 4;
+      const chCfdLev0 = view.getInt32(offset, true); offset += 4;
+      const chCfdZero1 = view.getInt32(offset, true); offset += 4;
+      const chCfdLev1 = view.getInt32(offset, true); offset += 4;
+      const chCount0 = view.getInt32(offset, true); offset += 4;
+      const chCount1 = view.getInt32(offset, true); offset += 4;
+      const chSyncDiv = view.getInt32(offset, true); offset += 4;
+      const chRouterModel = view.getInt32(offset, true); offset += 4;
+      const chRouterChan = view.getInt32(offset, true); offset += 4;
+      const chOffset = view.getInt32(offset, true); offset += 4;
+      const chSyncOffset = view.getInt32(offset, true); offset += 4;
+
+      // 曲線直方圖參數
+      const chChannels = view.getInt32(offset, true); offset += 4;
+      const chRangeNo = view.getInt32(offset, true); offset += 4;
+
+      // 檢查 Resolution 與 Channels 合理性（防衛容錯）
+      let actualResPs = (chResolution > 0 && chResolution < 10000) ? chResolution : 4.0;
+      let actualChannels = (chChannels > 0 && chChannels <= 65536) ? chChannels : 65536;
+
+      const resolutionNs = actualResPs / 1000.0;
+      const countsArray = new Uint32Array(actualChannels);
+
+      for (let i = 0; i < actualChannels; i++) {
+        if (offset + 4 <= buffer.byteLength) {
+          countsArray[i] = view.getUint32(offset, true);
+          offset += 4;
+        } else {
+          break;
         }
-      } catch (e) {
-        // 回退預設
       }
-    }
 
-    if (dataOffset === -1) {
-      // 容錯備案：預設倒推 65536 通道
-      channels = Math.floor((buffer.byteLength - 2048) / 4);
-      dataOffset = buffer.byteLength - (channels * 4);
-    }
+      // 生成標準 ASCII 內容
+      let ascii = `# File: PicoHarp 300 Interactive Data\n`;
+      ascii += `# Software: ${creatorName} ${creatorVersion}\n`;
+      ascii += `# Measurement Date: ${fileTime}\n`;
+      ascii += `# Curve Index: ${c}\n`;
+      ascii += `# Resolution: ${actualResPs} ps (${resolutionNs} ns)\n`;
+      ascii += `# Total Channels: ${actualChannels}\n`;
+      ascii += `# Sync Rate: ${chSyncRate > 0 ? chSyncRate : syncRate} Hz\n`;
+      ascii += `# Input Count Rate: ${chCount1 > 0 ? chCount1 : countRate1} cps\n`;
+      ascii += `# Time(ns)\tCounts\n`;
 
-    const resolutionNs = resolutionPs / 1000.0;
-    let output = `# PicoHarp 300 ASCII Export\n`;
-    output += `# Resolution: ${resolutionPs} ps (${resolutionNs} ns)\n`;
-    output += `# Channels: ${channels}\n`;
-    output += `Time(ns)\tCounts\n`;
+      for (let i = 0; i < actualChannels; i++) {
+        const t = (i * resolutionNs).toFixed(5);
+        ascii += `${t}\t${countsArray[i]}\n`;
+      }
 
-    for (let ch = 0; ch < channels; ch++) {
-      const counts = view.getUint32(dataOffset + (ch * 4), true);
-      const timeNs = (ch * resolutionNs).toFixed(5);
-      output += `${timeNs}\t${counts}\n`;
+      curves.push({
+        curveIndex: c,
+        resolutionPs: actualResPs,
+        channels: actualChannels,
+        text: ascii
+      });
     }
 
     return {
-      text: output,
-      info: `解析度: ${resolutionPs} ps, 點數: ${channels}`
+      ident,
+      fileTime,
+      numberOfCurves: Math.max(1, numberOfCurves),
+      curves
     };
   }
 
   async function processFiles(files) {
-    convertedFiles = [];
+    outputArchives = [];
     fileList.innerHTML = '';
 
-    const phdFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.phd'));
+    const validFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.phd'));
 
-    if (phdFiles.length === 0) {
-      statusText.textContent = '未選取 .phd 檔案。';
+    if (validFiles.length === 0) {
+      statusText.textContent = '未檢測到 .phd 檔案，請重新選取。';
       zipDownloadBtn.style.display = 'none';
       return;
     }
 
-    statusText.textContent = `解析中... (0/${phdFiles.length})`;
+    statusText.textContent = `解析中... (0/${validFiles.length})`;
     zipDownloadBtn.style.display = 'none';
 
-    for (let i = 0; i < phdFiles.length; i++) {
-      const file = phdFiles[i];
-      const newFileName = file.name.replace(/\.[^/.]+$/, "") + ".txt";
+    for (let i = 0; i < validFiles.length; i++) {
+      const file = validFiles[i];
+      const baseName = file.name.replace(/\.[^/.]+$/, "");
 
       try {
         const buffer = await file.arrayBuffer();
-        const result = parsePicoHarpPHD(buffer);
+        const parsed = parsePicoHarpFile(buffer);
 
-        convertedFiles.push({
-          name: newFileName,
-          content: result.text
+        parsed.curves.forEach((curve, idx) => {
+          const exportName = parsed.curves.length > 1 
+            ? `${baseName}_c${idx}.txt` 
+            : `${baseName}.txt`;
+
+          outputArchives.push({
+            name: exportName,
+            content: curve.text
+          });
+
+          renderFileItem(
+            exportName,
+            curve.text,
+            `量測時間: ${parsed.fileTime} | 解析度: ${curve.resolutionPs} ps | 點數: ${curve.channels}`,
+            false
+          );
         });
 
-        renderFileItem(newFileName, result.text, result.info, false);
       } catch (err) {
-        renderFileItem(newFileName, '', `解析失敗: ${err.message}`, true);
+        renderFileItem(file.name, '', `解析失敗: ${err.message}`, true);
       }
 
-      statusText.textContent = `解析中... (${i + 1}/${phdFiles.length})`;
+      statusText.textContent = `解析中... (${i + 1}/${validFiles.length})`;
     }
 
-    statusText.textContent = `完成！共轉換 ${convertedFiles.length} 個檔案。`;
-    if (convertedFiles.length > 0) {
+    statusText.textContent = `完成！成功處理 ${outputArchives.length} 條光譜/衰減曲線。`;
+    if (outputArchives.length > 0) {
       zipDownloadBtn.style.display = 'inline-block';
     }
   }
 
-  function renderFileItem(fileName, content, metaText, isError) {
+  function renderFileItem(fileName, content, metaInfo, isError) {
     const item = document.createElement('div');
     item.className = 'file-item';
 
-    const meta = document.createElement('div');
-    meta.className = 'file-meta';
+    const header = document.createElement('div');
+    header.className = 'file-header';
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'file-name';
     nameSpan.textContent = fileName;
 
-    const infoSpan = document.createElement('span');
-    infoSpan.className = `file-info ${isError ? 'badge-error' : ''}`;
-    infoSpan.textContent = metaText;
-
-    meta.appendChild(nameSpan);
-    meta.appendChild(infoSpan);
-
-    item.appendChild(meta);
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'file-actions';
 
     if (!isError) {
+      const toggleBtn = document.createElement('span');
+      toggleBtn.className = 'preview-toggle';
+      toggleBtn.textContent = '預覽數值';
+
       const downloadLink = document.createElement('a');
-      downloadLink.className = 'download-single';
+      downloadLink.className = 'download-link';
       downloadLink.textContent = '下載 .txt';
       downloadLink.href = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
       downloadLink.download = fileName;
-      item.appendChild(downloadLink);
+
+      actionsDiv.appendChild(toggleBtn);
+      actionsDiv.appendChild(downloadLink);
+
+      header.appendChild(nameSpan);
+      header.appendChild(actionsDiv);
+      item.appendChild(header);
+
+      const details = document.createElement('div');
+      details.className = 'file-details';
+      details.textContent = metaInfo;
+      item.appendChild(details);
+
+      // 預覽區塊（前 15 行）
+      const preview = document.createElement('div');
+      preview.className = 'file-preview';
+      preview.textContent = content.split('\n').slice(0, 16).join('\n') + '\n... (其餘省略)';
+      item.appendChild(preview);
+
+      toggleBtn.addEventListener('click', () => {
+        const isShown = preview.style.display === 'block';
+        preview.style.display = isShown ? 'none' : 'block';
+        toggleBtn.textContent = isShown ? '預覽數值' : '收起預覽';
+      });
+
+    } else {
+      header.appendChild(nameSpan);
+      item.appendChild(header);
+
+      const errorDetails = document.createElement('div');
+      errorDetails.className = 'file-details badge-error';
+      errorDetails.textContent = metaInfo;
+      item.appendChild(errorDetails);
     }
 
     fileList.appendChild(item);
   }
 
   zipDownloadBtn.addEventListener('click', async () => {
-    if (convertedFiles.length === 0) return;
+    if (outputArchives.length === 0) return;
 
     zipDownloadBtn.disabled = true;
     zipDownloadBtn.textContent = '打包中...';
 
     try {
       const zip = new JSZip();
-      convertedFiles.forEach(file => {
-        zip.file(file.name, file.content);
+      outputArchives.forEach(f => {
+        zip.file(f.name, f.content);
       });
 
       const zipBlob = await zip.generateAsync({ type: 'blob' });
