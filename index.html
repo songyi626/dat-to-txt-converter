@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PicoHarp 300 (.phd) 轉 ASCII 數據表格</title>
+  <title>PicoHarp 300 (.phd) 轉純數據表格</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     * {
@@ -162,12 +162,12 @@
 <body>
 
 <div class="container">
-  <h1>PicoHarp 300 (.phd) 轉 ASCII 工具</h1>
-  <p class="subtitle">解析 PicoHarp 300 2.0 / 2.3 二進位結構，產出 Origin 專用 Time(ns) 與 Counts 表格</p>
+  <h1>PicoHarp 300 (.phd) 轉純數據表格</h1>
+  <p class="subtitle">僅保留雙欄數值（Time[ns] 與 Counts），不含任何表頭文字</p>
 
   <div class="drop-zone" id="dropZone">
     <p>拖曳多個 <strong>.phd</strong> 檔案至此，或點擊選取檔案</p>
-    <span>完全於瀏覽器本機解析二進位檔頭與直方圖陣列，支援批次多檔轉換</span>
+    <span>瀏覽器本機端批次解析，直接輸出兩欄純數值格式</span>
     <input type="file" id="fileInput" multiple accept=".phd, .PHD">
   </div>
 
@@ -210,12 +210,10 @@
     return str.trim();
   }
 
-  // 核心：依據 PicoHarp 2.0 二進位結構循序解碼
   function parsePicoHarpFile(buffer) {
     const view = new DataView(buffer);
     let offset = 0;
 
-    // 1. Main Header
     const ident = readAscii(view, offset, 16); offset += 16;
     if (!ident.includes('PicoHarp 300')) {
       throw new Error(`非標準 PicoHarp 300 格式 (Ident: ${ident})`);
@@ -225,128 +223,73 @@
     const creatorName = readAscii(view, offset, 18); offset += 18;
     const creatorVersion = readAscii(view, offset, 12); offset += 12;
     const fileTime = readAscii(view, offset, 18); offset += 18;
-    const crlf = readAscii(view, offset, 2); offset += 2;
-    const comment = readAscii(view, offset, 256); offset += 256;
+    offset += 2;   // crlf
+    offset += 256; // comment
 
     const numberOfCurves = view.getInt32(offset, true); offset += 4;
     const bitsPerHistoBin = view.getInt32(offset, true); offset += 4;
     const routingChannels = view.getInt32(offset, true); offset += 4;
-    const numberOfBoards = view.getInt32(offset, true); offset += 4;
-    const activeCurve = view.getInt32(offset, true); offset += 4;
-    const measurementMode = view.getInt32(offset, true); offset += 4;
-    const subMode = view.getInt32(offset, true); offset += 4;
-    const rangeNo = view.getInt32(offset, true); offset += 4;
-    const offsetVal = view.getInt32(offset, true); offset += 4;
-    const acqTime = view.getInt32(offset, true); offset += 4; // ms
-    const stopAt = view.getInt32(offset, true); offset += 4;
-    const stopOnOvfl = view.getInt32(offset, true); offset += 4;
-    const restart = view.getInt32(offset, true); offset += 4;
-    const dispLinLog = view.getInt32(offset, true); offset += 4;
-    const dispTimeFrom = view.getInt32(offset, true); offset += 4;
-    const dispTimeTo = view.getInt32(offset, true); offset += 4;
-    const dispCountFrom = view.getInt32(offset, true); offset += 4;
-    const dispCountTo = view.getInt32(offset, true); offset += 4;
+    offset += (4 * 15); // other header settings
 
-    // 8 個 Display Curves
-    offset += (8 * 4 * 3); // DispCurveMap to DispCurveDispBottom
+    // Display Curves (8 * 4 * 3)
+    offset += (8 * 4 * 3);
 
-    // 3 個光標 Cursor
+    // Cursors (3 * 4 * 3)
     offset += (3 * 4 * 3);
 
-    // Board Specific Header (PicoHarp 300 單板結構)
-    const hwSerial = readAscii(view, offset, 10); offset += 10;
-    const hwPartNo = readAscii(view, offset, 8); offset += 8;
-    const hwVersion = view.getInt32(offset, true); offset += 4;
-    const hwIndex = view.getInt32(offset, true); offset += 4;
-    const numInputs = view.getInt32(offset, true); offset += 4;
-    const p300_resolution = view.getInt32(offset, true); offset += 4;
-    const syncRate = view.getInt32(offset, true); offset += 4;
-    const cfdZeroCross0 = view.getInt32(offset, true); offset += 4;
-    const cfdLevel0 = view.getInt32(offset, true); offset += 4;
-    const cfdZeroCross1 = view.getInt32(offset, true); offset += 4;
-    const cfdLevel1 = view.getInt32(offset, true); offset += 4;
-    const countRate0 = view.getInt32(offset, true); offset += 4;
-    const countRate1 = view.getInt32(offset, true); offset += 4;
-    const syncDivider = view.getInt32(offset, true); offset += 4;
+    // Board Specific Header
+    offset += 10; // hwSerial
+    offset += 8;  // hwPartNo
+    offset += (4 * 12); // board settings
 
-    // Router 擴充結構 (若有配備路由通道)
+    // Router structure
     if (routingChannels > 1) {
-      offset += (routingChannels * (4 + 4 + 4 + 4)); // Router 通道屬性
+      offset += (routingChannels * (4 + 4 + 4 + 4));
     }
 
     const curves = [];
 
-    // 2. 依序讀取 Curve SubHeader 與 Histogram Counts
     for (let c = 0; c < Math.max(1, numberOfCurves); c++) {
       if (offset >= buffer.byteLength) break;
 
-      const curveIndex = view.getInt32(offset, true); offset += 4;
-      const timeOfRec = view.getUint32(offset, true); offset += 4;
-      const chHwSerial = readAscii(view, offset, 10); offset += 10;
-      const chHwPartNo = readAscii(view, offset, 8); offset += 8;
-      const chHwVersion = view.getInt32(offset, true); offset += 4;
-      const chHwIndex = view.getInt32(offset, true); offset += 4;
-      const chInput = view.getInt32(offset, true); offset += 4;
-      const chResolution = view.getFloat32(offset, true); offset += 4; // 重要：以 ps 為單位的 float
-      const chSyncRate = view.getInt32(offset, true); offset += 4;
-      const chCfdZero0 = view.getInt32(offset, true); offset += 4;
-      const chCfdLev0 = view.getInt32(offset, true); offset += 4;
-      const chCfdZero1 = view.getInt32(offset, true); offset += 4;
-      const chCfdLev1 = view.getInt32(offset, true); offset += 4;
-      const chCount0 = view.getInt32(offset, true); offset += 4;
-      const chCount1 = view.getInt32(offset, true); offset += 4;
-      const chSyncDiv = view.getInt32(offset, true); offset += 4;
-      const chRouterModel = view.getInt32(offset, true); offset += 4;
-      const chRouterChan = view.getInt32(offset, true); offset += 4;
-      const chOffset = view.getInt32(offset, true); offset += 4;
-      const chSyncOffset = view.getInt32(offset, true); offset += 4;
+      offset += 4; // curveIndex
+      offset += 4; // timeOfRec
+      offset += 10; // chHwSerial
+      offset += 8;  // chHwPartNo
+      offset += (4 * 3); // chHwVersion, chHwIndex, chInput
+      
+      const chResolution = view.getFloat32(offset, true); offset += 4;
+      offset += (4 * 12); // rates, levels, sync settings, router
 
-      // 曲線直方圖參數
       const chChannels = view.getInt32(offset, true); offset += 4;
-      const chRangeNo = view.getInt32(offset, true); offset += 4;
+      offset += 4; // chRangeNo
 
-      // 檢查 Resolution 與 Channels 合理性（防衛容錯）
       let actualResPs = (chResolution > 0 && chResolution < 10000) ? chResolution : 4.0;
       let actualChannels = (chChannels > 0 && chChannels <= 65536) ? chChannels : 65536;
 
       const resolutionNs = actualResPs / 1000.0;
-      const countsArray = new Uint32Array(actualChannels);
+      let pureData = '';
 
       for (let i = 0; i < actualChannels; i++) {
         if (offset + 4 <= buffer.byteLength) {
-          countsArray[i] = view.getUint32(offset, true);
+          const counts = view.getUint32(offset, true);
           offset += 4;
+          const t = (i * resolutionNs).toFixed(5);
+          pureData += `${t}\t${counts}\n`;
         } else {
           break;
         }
-      }
-
-      // 生成標準 ASCII 內容
-      let ascii = `# File: PicoHarp 300 Interactive Data\n`;
-      ascii += `# Software: ${creatorName} ${creatorVersion}\n`;
-      ascii += `# Measurement Date: ${fileTime}\n`;
-      ascii += `# Curve Index: ${c}\n`;
-      ascii += `# Resolution: ${actualResPs} ps (${resolutionNs} ns)\n`;
-      ascii += `# Total Channels: ${actualChannels}\n`;
-      ascii += `# Sync Rate: ${chSyncRate > 0 ? chSyncRate : syncRate} Hz\n`;
-      ascii += `# Input Count Rate: ${chCount1 > 0 ? chCount1 : countRate1} cps\n`;
-      ascii += `# Time(ns)\tCounts\n`;
-
-      for (let i = 0; i < actualChannels; i++) {
-        const t = (i * resolutionNs).toFixed(5);
-        ascii += `${t}\t${countsArray[i]}\n`;
       }
 
       curves.push({
         curveIndex: c,
         resolutionPs: actualResPs,
         channels: actualChannels,
-        text: ascii
+        text: pureData
       });
     }
 
     return {
-      ident,
       fileTime,
       numberOfCurves: Math.max(1, numberOfCurves),
       curves
@@ -389,7 +332,7 @@
           renderFileItem(
             exportName,
             curve.text,
-            `量測時間: ${parsed.fileTime} | 解析度: ${curve.resolutionPs} ps | 點數: ${curve.channels}`,
+            `解析度: ${curve.resolutionPs} ps | 資料點數: ${curve.channels}`,
             false
           );
         });
@@ -401,7 +344,7 @@
       statusText.textContent = `解析中... (${i + 1}/${validFiles.length})`;
     }
 
-    statusText.textContent = `完成！成功處理 ${outputArchives.length} 條光譜/衰減曲線。`;
+    statusText.textContent = `完成！共轉換 ${outputArchives.length} 條純數據曲線。`;
     if (outputArchives.length > 0) {
       zipDownloadBtn.style.display = 'inline-block';
     }
@@ -424,7 +367,7 @@
     if (!isError) {
       const toggleBtn = document.createElement('span');
       toggleBtn.className = 'preview-toggle';
-      toggleBtn.textContent = '預覽數值';
+      toggleBtn.textContent = '預覽數據';
 
       const downloadLink = document.createElement('a');
       downloadLink.className = 'download-link';
@@ -444,16 +387,16 @@
       details.textContent = metaInfo;
       item.appendChild(details);
 
-      // 預覽區塊（前 15 行）
+      // 預覽前 15 行純數據
       const preview = document.createElement('div');
       preview.className = 'file-preview';
-      preview.textContent = content.split('\n').slice(0, 16).join('\n') + '\n... (其餘省略)';
+      preview.textContent = content.split('\n').slice(0, 16).join('\n') + '\n... (其餘數據省略)';
       item.appendChild(preview);
 
       toggleBtn.addEventListener('click', () => {
         const isShown = preview.style.display === 'block';
         preview.style.display = isShown ? 'none' : 'block';
-        toggleBtn.textContent = isShown ? '預覽數值' : '收起預覽';
+        toggleBtn.textContent = isShown ? '預覽數據' : '收起預覽';
       });
 
     } else {
@@ -485,7 +428,7 @@
       const downloadUrl = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = downloadUrl;
-      a.download = `PicoHarp_ASCII_${new Date().toISOString().slice(0, 10)}.zip`;
+      a.download = `PicoHarp_Data_${new Date().toISOString().slice(0, 10)}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
