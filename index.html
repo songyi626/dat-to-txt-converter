@@ -21,27 +21,27 @@
     }
     .container {
       width: 100%;
-      max-width: 760px;
+      max-width: 780px;
       background: #ffffff;
       padding: 32px;
       border-radius: 12px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.06);
     }
     h1 {
-      font-size: 24px;
+      font-size: 22px;
       font-weight: 700;
       color: #1a202c;
       margin-bottom: 8px;
     }
     p.subtitle {
-      font-size: 14px;
+      font-size: 13px;
       color: #718096;
       margin-bottom: 24px;
     }
     .drop-zone {
       border: 2px dashed #cbd5e0;
       border-radius: 8px;
-      padding: 40px 20px;
+      padding: 36px 20px;
       text-align: center;
       background: #f7fafc;
       cursor: pointer;
@@ -68,7 +68,7 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 24px;
+      margin-top: 20px;
       min-height: 40px;
     }
     .status-text {
@@ -80,7 +80,7 @@
       background-color: #3182ce;
       color: #fff;
       border: none;
-      padding: 10px 18px;
+      padding: 9px 16px;
       border-radius: 6px;
       font-size: 14px;
       font-weight: 600;
@@ -91,13 +91,9 @@
     .btn:hover {
       background-color: #2b6cb0;
     }
-    .btn:disabled {
-      background-color: #a0aec0;
-      cursor: not-allowed;
-    }
     .file-list {
-      margin-top: 20px;
-      max-height: 360px;
+      margin-top: 16px;
+      max-height: 380px;
       overflow-y: auto;
       border-top: 1px solid #e2e8f0;
     }
@@ -107,18 +103,30 @@
       align-items: center;
       padding: 12px 8px;
       border-bottom: 1px solid #edf2f7;
-      font-size: 14px;
+      font-size: 13px;
+    }
+    .file-meta {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-width: 75%;
     }
     .file-name {
-      font-weight: 500;
+      font-weight: 600;
       color: #2d3748;
       word-break: break-all;
-      margin-right: 12px;
+    }
+    .file-info {
+      font-size: 12px;
+      color: #718096;
+    }
+    .badge-error {
+      color: #e53e3e;
+      font-weight: 600;
     }
     .download-single {
       color: #3182ce;
       text-decoration: none;
-      font-size: 13px;
       font-weight: 600;
       cursor: pointer;
       white-space: nowrap;
@@ -132,12 +140,12 @@
 
 <div class="container">
   <h1>.PHD 轉 .TXT 批次轉換工具</h1>
-  <p class="subtitle">在瀏覽器本機端直接解析與格式轉換，不經伺服器傳輸</p>
+  <p class="subtitle">支援多檔批次轉換、多編碼自動容錯及打包下載</p>
 
   <div class="drop-zone" id="dropZone">
     <p>拖曳多個 <strong>.phd</strong> 檔案至此，或點擊選取檔案</p>
-    <span>支援多選檔案與自動編碼相容</span>
-    <input type="file" id="fileInput" multiple accept=".phd">
+    <span>支援多選、大小寫 .phd / .PHD 格式相容</span>
+    <input type="file" id="fileInput" multiple accept=".phd, .PHD, *">
   </div>
 
   <div class="actions">
@@ -172,81 +180,155 @@
     e.preventDefault();
     dropZone.classList.remove('dragover');
     if (e.dataTransfer.files.length > 0) {
-      handleFiles(e.dataTransfer.files);
+      processFiles(e.dataTransfer.files);
     }
   });
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      handleFiles(e.target.files);
+      processFiles(e.target.files);
     }
   });
 
-  // 解碼邏輯：優先嘗試 UTF-8，若有替換字元 (U+FFFD) 則回退至 Big-5 / ANSI
-  async function readTextWithFallback(file) {
-    const buffer = await file.arrayBuffer();
-    try {
-      const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
-      return utf8Decoder.decode(buffer);
-    } catch {
-      try {
-        const big5Decoder = new TextDecoder('big5');
-        return big5Decoder.decode(buffer);
-      } catch {
-        const fallbackDecoder = new TextDecoder('windows-1252');
-        return fallbackDecoder.decode(buffer);
-      }
+  // 判斷位元組陣列是否大量包含非純文字不可見字元（Null byte 或控制字元）
+  function isBinaryData(uint8Array) {
+    let nullCount = 0;
+    const sampleSize = Math.min(uint8Array.length, 1000);
+    for (let i = 0; i < sampleSize; i++) {
+      if (uint8Array[i] === 0) nullCount++;
     }
+    return (nullCount / sampleSize) > 0.05;
   }
 
-  async function handleFiles(files) {
+  // 從混合二進位檔案中提取可見字元與數值資料行
+  function extractPrintableText(uint8Array) {
+    let result = '';
+    let currentLine = '';
+    for (let i = 0; i < uint8Array.length; i++) {
+      const b = uint8Array[i];
+      if (b === 10 || b === 13) { // 換行
+        if (currentLine.trim().length > 0) {
+          result += currentLine.trim() + '\n';
+          currentLine = '';
+        }
+      } else if (b >= 32 && b <= 126) { // 可見 ASCII 字元
+        currentLine += String.fromCharCode(b);
+      } else if (b === 9) { // Tab 分隔符
+        currentLine += '\t';
+      }
+    }
+    if (currentLine.trim().length > 0) {
+      result += currentLine.trim() + '\n';
+    }
+    return result;
+  }
+
+  // 解碼邏輯：嘗試 UTF-8 ➔ Big5 ➔ ANSI，若判定為二進位則啟動文字提取器
+  async function parsePhdFile(file) {
+    const buffer = await file.arrayBuffer();
+    const uint8 = new Uint8Array(buffer);
+
+    if (isBinaryData(uint8)) {
+      const extracted = extractPrintableText(uint8);
+      return {
+        text: extracted,
+        type: '已自動提取可讀文字/數值資料（二進位結構）'
+      };
+    }
+
+    // 嘗試一般文字解碼
+    const encodings = ['utf-8', 'big5', 'windows-1252'];
+    for (const enc of encodings) {
+      try {
+        const decoder = new TextDecoder(enc, { fatal: false });
+        const decoded = decoder.decode(buffer);
+        if (decoded && !decoded.includes('\uFFFD')) {
+          return { text: decoded, type: `編碼: ${enc.toUpperCase()}` };
+        }
+      } catch (err) {
+        continue;
+      }
+    }
+
+    // 若都帶有未知字元，以寬鬆 UTF-8 輸出
+    const fallbackDecoder = new TextDecoder('utf-8', { fatal: false });
+    return {
+      text: fallbackDecoder.decode(buffer),
+      type: '編碼: UTF-8 (寬鬆模式)'
+    };
+  }
+
+  async function processFiles(files) {
     convertedFiles = [];
     fileList.innerHTML = '';
-    const validFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.phd'));
+    
+    // 過濾副檔名，大小寫皆可
+    const phdFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.phd'));
 
-    if (validFiles.length === 0) {
-      statusText.textContent = '未檢測到副檔名為 .phd 的檔案。';
+    if (phdFiles.length === 0) {
+      statusText.textContent = '未檢測到 .phd 檔案，請確認選取的檔案副檔名。';
       zipDownloadBtn.style.display = 'none';
       return;
     }
 
-    statusText.textContent = `處理中... (0/${validFiles.length})`;
+    statusText.textContent = `處理中... (0/${phdFiles.length})`;
     zipDownloadBtn.style.display = 'none';
 
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i];
-      const textContent = await readTextWithFallback(file);
+    for (let i = 0; i < phdFiles.length; i++) {
+      const file = phdFiles[i];
       const newFileName = file.name.replace(/\.[^/.]+$/, "") + ".txt";
 
-      convertedFiles.push({
-        name: newFileName,
-        content: textContent
-      });
+      try {
+        const { text, type } = await parsePhdFile(file);
+        
+        convertedFiles.push({
+          name: newFileName,
+          content: text
+        });
 
-      renderFileItem(newFileName, textContent);
-      statusText.textContent = `處理中... (${i + 1}/${validFiles.length})`;
+        renderFileItem(newFileName, text, type, false);
+      } catch (err) {
+        renderFileItem(newFileName, '', `解析失敗: ${err.message}`, true);
+      }
+
+      statusText.textContent = `處理中... (${i + 1}/${phdFiles.length})`;
     }
 
-    statusText.textContent = `完成！共轉換 ${convertedFiles.length} 個檔案。`;
-    zipDownloadBtn.style.display = 'inline-block';
+    statusText.textContent = `處理完成！共解析 ${convertedFiles.length} 個檔案。`;
+    if (convertedFiles.length > 0) {
+      zipDownloadBtn.style.display = 'inline-block';
+    }
   }
 
-  function renderFileItem(fileName, content) {
+  function renderFileItem(fileName, content, metaText, isError) {
     const item = document.createElement('div');
     item.className = 'file-item';
+
+    const meta = document.createElement('div');
+    meta.className = 'file-meta';
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'file-name';
     nameSpan.textContent = fileName;
 
-    const downloadLink = document.createElement('a');
-    downloadLink.className = 'download-single';
-    downloadLink.textContent = '下載 .txt';
-    downloadLink.href = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
-    downloadLink.download = fileName;
+    const infoSpan = document.createElement('span');
+    infoSpan.className = `file-info ${isError ? 'badge-error' : ''}`;
+    infoSpan.textContent = metaText;
 
-    item.appendChild(nameSpan);
-    item.appendChild(downloadLink);
+    meta.appendChild(nameSpan);
+    meta.appendChild(infoSpan);
+
+    item.appendChild(meta);
+
+    if (!isError) {
+      const downloadLink = document.createElement('a');
+      downloadLink.className = 'download-single';
+      downloadLink.textContent = '下載 .txt';
+      downloadLink.href = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
+      downloadLink.download = fileName;
+      item.appendChild(downloadLink);
+    }
+
     fileList.appendChild(item);
   }
 
@@ -256,23 +338,27 @@
     zipDownloadBtn.disabled = true;
     zipDownloadBtn.textContent = '打包中...';
 
-    const zip = new JSZip();
-    convertedFiles.forEach(file => {
-      zip.file(file.name, file.content);
-    });
+    try {
+      const zip = new JSZip();
+      convertedFiles.forEach(file => {
+        zip.file(file.name, file.content);
+      });
 
-    const zipBlob = await zip.generateAsync({ type: 'blob' });
-    const downloadUrl = URL.createObjectURL(zipBlob);
-    const a = document.createElement('a');
-    a.href = downloadUrl;
-    a.download = `phd_converted_${new Date().toISOString().slice(0, 10)}.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(downloadUrl);
-
-    zipDownloadBtn.disabled = false;
-    zipDownloadBtn.textContent = '打包下載全部 (.zip)';
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const downloadUrl = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `phd_converted_${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(downloadUrl);
+    } catch (e) {
+      alert('打包 ZIP 失敗：' + e.message);
+    } finally {
+      zipDownloadBtn.disabled = false;
+      zipDownloadBtn.textContent = '打包下載全部 (.zip)';
+    }
   });
 </script>
 
